@@ -2688,7 +2688,9 @@ function mapCase(row, disps, msgs, photos){
   const label=SB_TMAP[row.type]||row.type;
   return { id:row.case_code, dbId:row.id, type:row.type, label, type_label:label, icon:SB_IMAP[row.type]||'❗',
     name:row.reporter_name, phone:row.reporter_phone||'', loc:row.location||'', detail:row.detail||'-',
-    prio:row.priority, status:row.status, time:fmtTime(row.reported_at), gps, photos, dispatched, respSt, chat, chats };
+    prio:row.priority, status:row.status,
+    time: fmtDate(new Date(row.reported_at))+' '+fmtTime(row.reported_at),  // DD/MM/YYYY HH:MM on every record
+    gps, photos, dispatched, respSt, chat, chats };
 }
 
 function refreshActive(){
@@ -3004,6 +3006,45 @@ function restoreSession(){
   if(s.caseId) S.caseId=s.caseId;
   goPage(s.role);
 }
+
+/* ───── live date next to the clock ───── */
+function fmtDate(d){ const p=n=>String(n).padStart(2,'0'); return p(d.getDate())+'/'+p(d.getMonth()+1)+'/'+d.getFullYear(); }
+function sosDateClock(){
+  const ds=fmtDate(new Date());
+  ['time-pub','time-op','time-resp'].forEach(id=>{
+    const el=document.getElementById(id); if(!el) return;
+    let de=document.getElementById(id+'-date');
+    if(!de){
+      de=document.createElement('span'); de.id=id+'-date';
+      de.style.cssText='margin-right:8px;font-family:var(--mono);font-size:12px;color:var(--gray-400);white-space:nowrap;';
+      // beat the mobile ".topbar-time{display:none!important}" rule so the date shows on phones too
+      de.style.setProperty('display','inline-block','important');
+      el.parentNode.insertBefore(de, el);
+    }
+    de.textContent='📅 '+ds;
+  });
+}
+setInterval(sosDateClock,1000); sosDateClock();
+
+/* ───── phone fields: auto +856 prefix, public starts at 020 (→ "20"), digits only ───── */
+const PHONE_PREFIX='+856 20 ';
+function sanitizePhone(el){
+  let v=el.value.replace(/[^\d+\s]/g,'');                 // allow only digits, "+", spaces — never letters
+  if(!v.startsWith('+856')){
+    const rest=v.replace(/\+/g,'').replace(/^856\s*/,'');
+    v='+856 '+rest;
+  }
+  el.value=v;
+}
+function setupPhoneField(id){
+  const el=document.getElementById(id); if(!el) return;
+  el.setAttribute('inputmode','tel');
+  if(!el.value || !el.value.startsWith('+856')) el.value=PHONE_PREFIX;   // show prefix automatically
+  el.addEventListener('input', ()=>sanitizePhone(el));
+  el.addEventListener('focus', ()=>{ if(!el.value || !el.value.startsWith('+856')) el.value=PHONE_PREFIX; });
+  el.addEventListener('keypress', e=>{ if(/[A-Za-z]/.test(e.key)) e.preventDefault(); }); // block letters
+}
+['pub-phone','r-phone','g-phone','eu-phone'].forEach(setupPhoneField);
 
 /* ───── bootstrap ───── */
 /* Restore the page FIRST (synchronous, no flash of the login screen),
