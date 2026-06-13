@@ -551,6 +551,20 @@ a{text-decoration:none;}
 /* Supabase project connection (publishable key — safe for client-side, RLS-enforced) */
 const SUPABASE_URL = 'https://ctlklnptszzjdgbsyqdu.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_zeFAnAjXhFJybxKIhHMNhQ_FFfdMusJ';
+/* TURN relay servers for WebRTC reliability on strict NAT / mobile networks.
+   Default = OpenRelay public TURN (free, no signup). For best reliability, replace
+   with your own from Metered's free tier (https://www.metered.ca/tools/openrelay/). */
+/* Metered TURN (app: sos-laos.metered.live). These username/credential are
+   client-side relay credentials — safe to ship. The account's secret/API key is NOT here. */
+const TURN_SERVERS = [
+  { urls:'turn:global.relay.metered.ca:80',                username:'ec3a30e1fa922375136ceef7', credential:'a+Duqu/T3rlvljpW' },
+  { urls:'turn:global.relay.metered.ca:80?transport=tcp',  username:'ec3a30e1fa922375136ceef7', credential:'a+Duqu/T3rlvljpW' },
+  { urls:'turn:global.relay.metered.ca:443',               username:'ec3a30e1fa922375136ceef7', credential:'a+Duqu/T3rlvljpW' },
+  { urls:'turns:global.relay.metered.ca:443?transport=tcp',username:'ec3a30e1fa922375136ceef7', credential:'a+Duqu/T3rlvljpW' },
+];
+/* Optional: leave '' (static creds above are used). To rotate to fresh creds automatically,
+   paste a Metered credentials URL: 'https://sos-laos.metered.live/api/v1/turn/credentials?apiKey=XXXX'. */
+const METERED_TURN_API = '';
 let sb = null;
 try { sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { realtime:{ params:{ eventsPerSecond:5 } } }); }
 catch(e){ console.error('Supabase init failed', e); }
@@ -3192,6 +3206,122 @@ window.startCall = function(caller){
   window.location.href='tel:'+String(number).replace(/[^\d+]/g,'');
 };
 
+/* ═══════════ IN-APP VOICE CALL (WebRTC · Supabase Realtime signaling · free STUN) ═══════════ */
+const RTC = { pc:null, stream:null, callId:null, replyTo:null, isCaller:false, answered:false, active:false, incoming:null, timer:null, sec:0 };
+const ICE_CFG = { iceServers:[
+  {urls:'stun:stun.l.google.com:19302'},
+  {urls:'stun:stun1.l.google.com:19302'},
+  ...(typeof TURN_SERVERS!=='undefined' ? TURN_SERVERS : [])
+] };
+let callChan = null;
+
+function callAddress(){               // how the other party reaches ME
+  if(S.role==='operator') return 'operator';
+  if(S.role==='public')   return 'public:'+(S.caseId||'');
+  return S.role+':'+(S.selCase||S.caseId||'');
+}
+function sigSend(p){ if(callChan) try{ callChan.send({ type:'broadcast', event:'sig', payload:p }); }catch(e){} }
+function rtcAudio(){
+  let a=document.getElementById('rtc-remote-audio');
+  if(!a){ a=document.createElement('audio'); a.id='rtc-remote-audio'; a.autoplay=true; a.setAttribute('playsinline',''); document.body.appendChild(a); }
+  return a;
+}
+function newPC(){
+  const pc=new RTCPeerConnection(ICE_CFG);
+  pc.onicecandidate=e=>{ if(e.candidate) sigSend({type:'ice', callId:RTC.callId, to:RTC.replyTo, candidate:e.candidate}); };
+  pc.ontrack=e=>{ rtcAudio().srcObject=e.streams[0]; };
+  return pc;
+}
+function showCallUI(o){
+  const nm=document.getElementById('call-name-txt'); if(nm) nm.textContent=o.title;
+  const st=document.getElementById('call-status-txt'); if(st) st.textContent=o.status;
+  const tm=document.getElementById('call-timer-txt'); if(tm) tm.style.display='none';
+  const av=document.getElementById('call-av'); if(av){ av.textContent=o.icon||'👤'; av.classList.toggle('ringing',!!o.ringing); }
+  const ans=document.getElementById('call-ans-btn'); if(ans) ans.style.display=o.answerBtn?'flex':'none';
+  const ov=document.getElementById('call-overlay'); if(ov) ov.classList.add('open');
+}
+function startTimerUI(){
+  const st=document.getElementById('call-status-txt'); if(st) st.textContent='ກຳລັງສົນທະນາ';
+  const av=document.getElementById('call-av'); if(av) av.classList.remove('ringing');
+  const ans=document.getElementById('call-ans-btn'); if(ans) ans.style.display='none';
+  const tm=document.getElementById('call-timer-txt'); if(tm) tm.style.display='block';
+  RTC.sec=0; clearInterval(RTC.timer);
+  RTC.timer=setInterval(()=>{ RTC.sec++; const m=String(Math.floor(RTC.sec/60)).padStart(2,'0'),s=String(RTC.sec%60).padStart(2,'0'); if(tm) tm.textContent=m+':'+s; },1000);
+}
+function hangup(send){
+  if(send && RTC.callId) sigSend({type:'end', callId:RTC.callId, to:RTC.replyTo});
+  if(RTC.pc){ try{RTC.pc.close();}catch(e){} }
+  if(RTC.stream){ RTC.stream.getTracks().forEach(t=>t.stop()); }
+  const a=document.getElementById('rtc-remote-audio'); if(a) a.srcObject=null;
+  clearInterval(RTC.timer);
+  Object.assign(RTC,{ pc:null, stream:null, callId:null, replyTo:null, isCaller:false, answered:false, active:false, incoming:null, sec:0 });
+  const ov=document.getElementById('call-overlay'); if(ov) ov.classList.remove('open');
+  const av=document.getElementById('call-av'); if(av) av.classList.remove('ringing');
+}
+
+window.startCall = async function(caller){           // in-app voice call
+  if(RTC.active){ return; }
+  let to, title, icon;
+  if(caller==='operator'){ const code=S.selCase||S.caseId; to='public:'+code; const c=caseByCode(code); title=c?('👤 '+c.name):'ຜູ້ແຈ້ງເຫດ'; icon='👤'; }
+  else { to='operator'; title='🎧 ສູນສື່ສານ SOS'; icon='🎧'; }
+  if(!callChan){ alert('ການໂທຍັງບໍ່ພ້ອມ ລອງໃໝ່'); return; }
+  try{ RTC.stream=await navigator.mediaDevices.getUserMedia({audio:true}); }
+  catch(e){ alert('ບໍ່ສາມາດເຂົ້າເຖິງໄມໂຄຣໂຟນ — ກະລຸນາອະນຸຍາດໃຊ້ໄມໃນ Browser/ແອັບ'); return; }
+  RTC.active=true; RTC.isCaller=true; RTC.callId='c'+Date.now()+Math.random().toString(36).slice(2,6); RTC.replyTo=to;
+  RTC.pc=newPC();
+  RTC.stream.getTracks().forEach(t=>RTC.pc.addTrack(t,RTC.stream));
+  showCallUI({title, icon, status:'ກຳລັງໂທ...', ringing:true, answerBtn:false});
+  const offer=await RTC.pc.createOffer();
+  await RTC.pc.setLocalDescription(offer);
+  sigSend({type:'offer', callId:RTC.callId, to, from:callAddress(), fromRole:S.role, sdp:offer});
+};
+
+window.answerCall = async function(){
+  const msg=RTC.incoming; if(!msg) return;
+  RTC.answered=true; RTC.active=true; RTC.replyTo=msg.from;
+  try{ RTC.stream=await navigator.mediaDevices.getUserMedia({audio:true}); }
+  catch(e){ alert('ບໍ່ສາມາດເຂົ້າເຖິງໄມໂຄຣໂຟນ'); hangup(true); return; }
+  RTC.pc=newPC();
+  RTC.stream.getTracks().forEach(t=>RTC.pc.addTrack(t,RTC.stream));
+  await RTC.pc.setRemoteDescription(msg.sdp);
+  const ans=await RTC.pc.createAnswer();
+  await RTC.pc.setLocalDescription(ans);
+  sigSend({type:'answer', callId:RTC.callId, to:msg.from, sdp:ans});
+  startTimerUI();
+};
+
+window.endCall = function(){ hangup(true); };
+
+async function onSignal(msg){
+  if(!msg) return;
+  if(msg.type==='offer'){
+    if(msg.to!==callAddress() || RTC.active) return;     // not for me, or I'm busy
+    RTC.incoming=msg; RTC.callId=msg.callId; RTC.replyTo=msg.from; RTC.isCaller=false; RTC.answered=false;
+    const code=(msg.from||'').split(':')[1]||'';
+    showCallUI({ title:(msg.fromRole==='operator'?'🎧 ສູນສື່ສານ SOS':'👤 ຜູ້ແຈ້ງເຫດ '+code), icon:(msg.fromRole==='operator'?'🎧':'👤'), status:'ສາຍໂທເຂົ້າ...', ringing:true, answerBtn:true });
+    return;
+  }
+  if(msg.callId!==RTC.callId) return;
+  if(msg.type==='answer'){
+    if(RTC.isCaller && RTC.pc){ if(!RTC.pc.currentRemoteDescription) await RTC.pc.setRemoteDescription(msg.sdp); startTimerUI(); }
+    else if(!RTC.isCaller && !RTC.answered){ hangup(false); }   // another operator picked it up
+    return;
+  }
+  if(msg.type==='ice'){ try{ if(RTC.pc && msg.candidate) await RTC.pc.addIceCandidate(msg.candidate); }catch(e){} return; }
+  if(msg.type==='end'){ hangup(false); return; }
+}
+async function loadTurn(){            // optionally pull fresh TURN creds from Metered
+  if(typeof METERED_TURN_API==='undefined' || !METERED_TURN_API) return;
+  try{ const r=await fetch(METERED_TURN_API); const list=await r.json(); if(Array.isArray(list)) list.forEach(s=>ICE_CFG.iceServers.push(s)); }
+  catch(e){ console.error('TURN fetch failed', e); }
+}
+function initCalls(){
+  if(!sb || callChan) return;
+  loadTurn();
+  callChan = sb.channel('sos-calls', { config:{ broadcast:{ self:false } } });
+  callChan.on('broadcast',{event:'sig'}, ev=>onSignal(ev.payload)).subscribe();
+}
+
 /* ───── real GPS only — no demo coordinates ───── */
 (function(){ const st=document.createElement('style'); st.textContent='#gps-demo-btn{display:none!important;}'; document.head.appendChild(st); })();
 window.demoGPS = function(){ alert('ລະບົບໃຊ້ພິກັດ GPS ຈິງເທົ່ານັ້ນ — ກະລຸນາເປີດ Location/GPS ໃນເຄື່ອງ ແລ້ວກົດ "ດຶງພິກັດ GPS" ອີກຄັ້ງ'); };
@@ -3204,6 +3334,7 @@ if(sb){
   loadCases();
   loadMembers();
   initRealtime();
+  initCalls();
 } else {
   console.warn('Supabase not available — running with in-memory demo data only.');
 }
