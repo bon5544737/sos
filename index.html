@@ -3207,7 +3207,7 @@ window.startCall = function(caller){
 };
 
 /* ═══════════ IN-APP VOICE CALL (WebRTC · Supabase Realtime signaling · free STUN) ═══════════ */
-const RTC = { pc:null, stream:null, callId:null, replyTo:null, isCaller:false, answered:false, active:false, incoming:null, timer:null, sec:0 };
+const RTC = { pc:null, stream:null, callId:null, replyTo:null, isCaller:false, answered:false, active:false, incoming:null, timer:null, sec:0, pendingIce:[] };
 const ICE_CFG = { iceServers:[
   {urls:'stun:stun.l.google.com:19302'},
   {urls:'stun:stun1.l.google.com:19302'},
@@ -3229,8 +3229,13 @@ function rtcAudio(){
 function newPC(){
   const pc=new RTCPeerConnection(ICE_CFG);
   pc.onicecandidate=e=>{ if(e.candidate) sigSend({type:'ice', callId:RTC.callId, to:RTC.replyTo, candidate:e.candidate}); };
-  pc.ontrack=e=>{ rtcAudio().srcObject=e.streams[0]; };
+  pc.ontrack=e=>{ const a=rtcAudio(); a.srcObject=e.streams[0]; a.muted=false; if(a.play) a.play().catch(()=>{}); };
   return pc;
+}
+async function flushIce(){           // apply candidates buffered before remoteDescription was set
+  if(!RTC.pc) return;
+  const list=RTC.pendingIce.splice(0);
+  for(const c of list){ try{ await RTC.pc.addIceCandidate(c); }catch(e){} }
 }
 function showCallUI(o){
   const nm=document.getElementById('call-name-txt'); if(nm) nm.textContent=o.title;
@@ -3254,7 +3259,7 @@ function hangup(send){
   if(RTC.stream){ RTC.stream.getTracks().forEach(t=>t.stop()); }
   const a=document.getElementById('rtc-remote-audio'); if(a) a.srcObject=null;
   clearInterval(RTC.timer);
-  Object.assign(RTC,{ pc:null, stream:null, callId:null, replyTo:null, isCaller:false, answered:false, active:false, incoming:null, sec:0 });
+  Object.assign(RTC,{ pc:null, stream:null, callId:null, replyTo:null, isCaller:false, answered:false, active:false, incoming:null, sec:0, pendingIce:[] });
   const ov=document.getElementById('call-overlay'); if(ov) ov.classList.remove('open');
   const av=document.getElementById('call-av'); if(av) av.classList.remove('ringing');
 }
@@ -3284,6 +3289,7 @@ window.answerCall = async function(){
   RTC.pc=newPC();
   RTC.stream.getTracks().forEach(t=>RTC.pc.addTrack(t,RTC.stream));
   await RTC.pc.setRemoteDescription(msg.sdp);
+  await flushIce();
   const ans=await RTC.pc.createAnswer();
   await RTC.pc.setLocalDescription(ans);
   sigSend({type:'answer', callId:RTC.callId, to:msg.from, sdp:ans});
@@ -3303,11 +3309,16 @@ async function onSignal(msg){
   }
   if(msg.callId!==RTC.callId) return;
   if(msg.type==='answer'){
-    if(RTC.isCaller && RTC.pc){ if(!RTC.pc.currentRemoteDescription) await RTC.pc.setRemoteDescription(msg.sdp); startTimerUI(); }
+    if(RTC.isCaller && RTC.pc){ if(!RTC.pc.currentRemoteDescription){ await RTC.pc.setRemoteDescription(msg.sdp); await flushIce(); } startTimerUI(); }
     else if(!RTC.isCaller && !RTC.answered){ hangup(false); }   // another operator picked it up
     return;
   }
-  if(msg.type==='ice'){ try{ if(RTC.pc && msg.candidate) await RTC.pc.addIceCandidate(msg.candidate); }catch(e){} return; }
+  if(msg.type==='ice'){
+    if(!msg.candidate) return;
+    if(RTC.pc && RTC.pc.remoteDescription && RTC.pc.remoteDescription.type){ try{ await RTC.pc.addIceCandidate(msg.candidate); }catch(e){} }
+    else { RTC.pendingIce.push(msg.candidate); }   // buffer until remote description is set
+    return;
+  }
   if(msg.type==='end'){ hangup(false); return; }
 }
 async function loadTurn(){            // optionally pull fresh TURN creds from Metered
