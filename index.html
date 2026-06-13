@@ -3048,6 +3048,51 @@ function setupPhoneField(id){
 }
 ['pub-phone','r-phone','g-phone','eu-phone'].forEach(setupPhoneField);
 
+/* ───── Tap coordinates → show a Google map in-app (no API key needed) ───── */
+(function(){
+  const st=document.createElement('style');
+  st.textContent=
+    '.coords-txt,.rcard-coords{cursor:pointer;text-decoration:underline;text-underline-offset:2px;}'+
+    '.coords-txt:hover,.rcard-coords:hover{opacity:.8;}'+
+    '.coords-txt::after,.rcard-coords::after{content:" 🗺️ ເບິ່ງແຜນທີ່ Google";font-weight:500;}';
+  document.head.appendChild(st);
+
+  function ensureGmapModal(){
+    if(document.getElementById('gmap-modal')) return;
+    const ov=document.createElement('div');
+    ov.id='gmap-modal';
+    ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1000;display:none;align-items:center;justify-content:center;padding:1rem;font-family:var(--font);';
+    ov.innerHTML=
+      '<div style="background:#fff;border-radius:16px;width:100%;max-width:560px;overflow:hidden;box-shadow:0 24px 60px rgba(0,0,0,.3);">'+
+        '<div style="display:flex;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid #EDEDEB;">'+
+          '<span style="font-size:14px;font-weight:600;flex:1;">📍 ຕຳແໜ່ງເກີດເຫດ</span>'+
+          '<button id="gmap-close" style="background:#EDEDEB;border:none;border-radius:50%;width:30px;height:30px;font-size:16px;cursor:pointer;">✕</button>'+
+        '</div>'+
+        '<iframe id="gmap-frame" style="width:100%;height:340px;border:none;display:block;" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>'+
+        '<div style="padding:10px 14px;">'+
+          '<a id="gmap-open" target="_blank" rel="noopener" style="display:block;text-align:center;background:#1A7A3C;color:#fff;border-radius:10px;padding:11px;font-size:14px;font-weight:500;text-decoration:none;">🧭 ນຳທາງໃນແອັບ Google Maps</a>'+
+        '</div>'+
+      '</div>';
+    document.body.appendChild(ov);
+    ov.addEventListener('click',e=>{ if(e.target===ov) ov.style.display='none'; });
+    document.getElementById('gmap-close').addEventListener('click',()=>{ ov.style.display='none'; document.getElementById('gmap-frame').src='about:blank'; });
+  }
+  function openGmap(lat,lng){
+    ensureGmapModal();
+    document.getElementById('gmap-frame').src='https://maps.google.com/maps?q='+lat+','+lng+'&z=16&hl=lo&output=embed';
+    document.getElementById('gmap-open').href='https://www.google.com/maps/search/?api=1&query='+lat+','+lng;
+    document.getElementById('gmap-modal').style.display='flex';
+  }
+
+  document.addEventListener('click', e=>{
+    const el=e.target.closest && e.target.closest('.coords-txt,.rcard-coords');
+    if(!el) return;
+    const m=el.textContent.match(/(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)/);
+    if(!m) return;
+    openGmap(m[1],m[2]);
+  });
+})();
+
 /* ───── bootstrap ───── */
 /* Restore the page FIRST (synchronous, no flash of the login screen),
    then load data in the background — refreshActive() re-renders when it arrives. */
