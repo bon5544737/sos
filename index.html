@@ -2709,24 +2709,41 @@ function refreshActive(){
   }
 }
 
+let _photoCache={};   // case_id -> [image_url]; keeps photos showing across reloads
 async function loadCases(){
   if(!sb) return;
   try{
-    const [cr,dr,mr,pr]=await Promise.all([
-      sb.from('cases').select('*').order('reported_at',{ascending:false}),
-      sb.from('case_dispatches').select('*'),
-      sb.from('case_messages').select('*').order('created_at',{ascending:true}),
-      sb.from('case_photos').select('*').order('created_at',{ascending:true}),
-    ]);
-    if(cr.error) throw cr.error;
-    const byD={}, byM={}, byP={};
-    (dr.data||[]).forEach(d=>{ (byD[d.case_id]=byD[d.case_id]||[]).push(d); });
-    (mr.data||[]).forEach(m=>{ (byM[m.case_id]=byM[m.case_id]||[]).push(m); });
-    (pr.data||[]).forEach(p=>{ (byP[p.case_id]=byP[p.case_id]||[]).push(p.image_url); });
-    S.cases=(cr.data||[]).map(row=>mapCase(row, byD[row.id]||[], byM[row.id]||[], byP[row.id]||[]));
-    refreshActive();
+    // One round-trip: cases with their dispatches + messages embedded. Photos (heavy
+    // base64) are fetched separately in the background, below.
+    const { data, error } = await sb
+      .from('cases')
+      .select('*, case_dispatches(*), case_messages(sender,channel,body,created_at)')
+      .order('reported_at',{ascending:false})
+      .limit(300);
+    if(error) throw error;
+    S.cases=(data||[]).map(row=>{
+      const msgs=(row.case_messages||[]).slice().sort((a,b)=>new Date(a.created_at)-new Date(b.created_at));
+      return mapCase(row, row.case_dispatches||[], msgs, _photoCache[row.id]||[]);
+    });
+    refreshActive();          // queue / detail / cards render immediately (no waiting on images)
+    loadPhotos();             // images stream in afterwards
   }catch(e){ console.error('loadCases failed', e); }
 }
+async function loadPhotos(){
+  if(!sb) return;
+  try{
+    const { data } = await sb.from('case_photos').select('case_id,image_url').order('created_at',{ascending:true});
+    const byP={}; (data||[]).forEach(p=>{ (byP[p.case_id]=byP[p.case_id]||[]).push(p.image_url); });
+    _photoCache=byP;
+    let any=false;
+    S.cases.forEach(c=>{ const ph=byP[c.dbId]||[]; if(ph.length){ any=true; } c.photos=ph; });
+    if(any) refreshActive();
+  }catch(e){ console.error('loadPhotos failed', e); }
+}
+// coalesce bursts of realtime events into a single reload
+let _loadT=null, _loadMT=null;
+function scheduleLoad(){ clearTimeout(_loadT); _loadT=setTimeout(loadCases, 250); }
+function scheduleLoadMembers(){ clearTimeout(_loadMT); _loadMT=setTimeout(loadMembers, 250); }
 
 async function loadMembers(){
   if(!sb) return;
@@ -2747,7 +2764,8 @@ async function loadMembers(){
 /* ───── overrides: writes go to the database ───── */
 
 window._doSubmitReport = async function(name, phone, loc, detail){
-  const gps=S.gps||{lat:17.9667,lng:102.6000};
+  if(!S.gps){ alert('⚠️ ກະລຸນາດຶງພິກັດ GPS ຈິງກ່ອນ (ກົດ "ດຶງພິກັດ GPS" ແລະ ເປີດ Location/GPS ໃນເຄື່ອງ) — ລະບົບບໍ່ໃຊ້ພິກັດຕົວຢ່າງ'); return; }
+  const gps=S.gps;
   const dispatched=SB_AUTO[S.type]||{fire:false,police:true,hospital:false};
   const prio=(S.type==='fire'||S.type==='accident'||S.type==='medical')?'high':'med';
   const sentTo=Object.keys(dispatched).filter(k=>dispatched[k]).map(k=>SB_AGNAMES[k]).join(', ');
@@ -2940,10 +2958,11 @@ window.pubSendMsg = async function(){
   const ta=document.getElementById('chat-ta'); const txt=ta.value.trim();
   if(!txt||!S.caseId) return; const c=caseByCode(S.caseId); if(!c||!sb) return;
   const ch=activeChatChannel; ta.value='';
-  try{ await sb.from('case_messages').insert({case_id:c.dbId, sender:'public', channel:ch, body:txt}); }
-  catch(e){ alert(e.message||e); }
-  await loadCases();
+  const item={from:'public',txt,t:fmtTime(new Date().toISOString())};
+  if(ch==='operator') c.chat.push(item); else { (c.chats[ch]=c.chats[ch]||[]).push(item); } // optimistic
   renderChatMsgs(S.caseId,'public',ch);
+  try{ await sb.from('case_messages').insert({case_id:c.dbId, sender:'public', channel:ch, body:txt}); }
+  catch(e){ console.error(e); }
 };
 
 window.opSendChat = async function(){
@@ -2951,10 +2970,10 @@ window.opSendChat = async function(){
   const txt=inp.value.trim(); if(!txt||!S.selCase) return;
   const c=caseByCode(S.selCase); if(!c||!sb) return;
   inp.value='';
+  c.chat.push({from:'operator',txt,t:fmtTime(new Date().toISOString())}); // optimistic
+  renderOpChatMsgs(c);
   try{ await sb.from('case_messages').insert({case_id:c.dbId, sender:'operator', channel:'operator', body:txt}); }
-  catch(e){ alert(e.message||e); }
-  await loadCases();
-  const c2=caseByCode(S.selCase); if(c2) renderOpChatMsgs(c2);
+  catch(e){ console.error(e); }
 };
 
 window.respSendChat = async function(cid){
@@ -2962,19 +2981,45 @@ window.respSendChat = async function(cid){
   const txt=inp.value.trim(); if(!txt) return;
   const c=caseByCode(cid); if(!c||!sb) return;
   inp.value='';
+  (c.chats[role]=c.chats[role]||[]).push({from:role,txt,t:fmtTime(new Date().toISOString())}); // optimistic
+  renderResponder();
   try{ await sb.from('case_messages').insert({case_id:c.dbId, sender:role, channel:role, body:txt}); }
-  catch(e){ alert(e.message||e); }
-  await loadCases();
+  catch(e){ console.error(e); }
 };
 
 /* ───── realtime: push live updates to every connected role ───── */
+function mySenderId(){ return S.role==='public' ? 'public' : (S.role==='operator' ? 'operator' : S.role); }
 function initRealtime(){
   if(!sb) return;
   sb.channel('sos-realtime')
-    .on('postgres_changes',{event:'*',schema:'public',table:'cases'},          ()=>loadCases())
-    .on('postgres_changes',{event:'*',schema:'public',table:'case_dispatches'},()=>loadCases())
-    .on('postgres_changes',{event:'*',schema:'public',table:'case_messages'},  ()=>loadCases())
-    .on('postgres_changes',{event:'*',schema:'public',table:'public_members'}, ()=>loadMembers())
+    .on('postgres_changes',{event:'*',schema:'public',table:'cases'}, p=>{
+        if(p.eventType==='INSERT' && S.role==='operator'){
+          const r=p.new||{}; notify('🆘 ມີການແຈ້ງເຫດໃໝ່', (SB_TMAP[r.type]||r.type)+' · '+(r.location||''));
+        }
+        scheduleLoad();
+    })
+    .on('postgres_changes',{event:'*',schema:'public',table:'case_dispatches'}, p=>{
+        const r=p.new||{};
+        if(r.dispatched && r.agency===S.role && ['fire','police','hospital'].includes(S.role)){
+          notify('📡 ມີພາລະກິດໃໝ່', 'ມີເຫດທີ່ສົ່ງມາໃຫ້ໜ່ວຍຂອງທ່ານ');
+        }
+        scheduleLoad();
+    })
+    .on('postgres_changes',{event:'INSERT',schema:'public',table:'case_messages'}, p=>{
+        const r=p.new||{};
+        if(r.sender && r.sender!==mySenderId()){
+          let relevant=false;
+          if(S.role==='operator' && r.channel==='operator') relevant=true;
+          else if(['fire','police','hospital'].includes(S.role) && r.channel===S.role) relevant=true;
+          else if(S.role==='public'){ const c=caseByCode(S.caseId); relevant = !!(c && c.dbId===r.case_id); }
+          if(relevant) notify('💬 ຂໍ້ຄວາມໃໝ່', r.body);
+        }
+        scheduleLoad();
+    })
+    .on('postgres_changes',{event:'*',schema:'public',table:'public_members'}, p=>{
+        if(p.eventType==='INSERT' && S.role==='operator'){ notify('👤 ມີຄຳຂໍສະໝັກສະມາຊິກໃໝ່', 'ລໍຖ້າການອະນຸມັດ'); }
+        scheduleLoadMembers();
+    })
     .subscribe();
 }
 
@@ -3108,6 +3153,48 @@ window.setGPS = function(lat,lng,demo,accuracy){
   const content=document.getElementById('gps-map-content');
   if(content) content.innerHTML='<iframe src="https://maps.google.com/maps?q='+lat+','+lng+'&z=16&hl=lo&output=embed" style="width:100%;height:160px;border:none;display:block;" loading="lazy"></iframe>';
 };
+
+/* ───── notifications (in-app toast + system notification) ───── */
+function ensureNotifyPermission(){
+  try{ if('Notification' in window && Notification.permission==='default') Notification.requestPermission(); }catch(e){}
+}
+function showToast(title, body){
+  let host=document.getElementById('sos-toast-host');
+  if(!host){
+    host=document.createElement('div'); host.id='sos-toast-host';
+    host.style.cssText='position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:2000;display:flex;flex-direction:column;gap:8px;align-items:center;width:calc(100% - 24px);max-width:420px;pointer-events:none;';
+    document.body.appendChild(host);
+  }
+  const t=document.createElement('div');
+  t.style.cssText='background:#141413;color:#fff;border-radius:12px;padding:12px 14px;font-family:var(--font);font-size:13px;box-shadow:0 8px 24px rgba(0,0,0,.3);width:100%;animation:fadeUp .25s ease;';
+  t.innerHTML='<div style="font-weight:600;margin-bottom:2px;">'+title+'</div>'+(body?('<div style="opacity:.85;font-size:12px;">'+body+'</div>'):'');
+  host.appendChild(t);
+  setTimeout(()=>{ t.style.transition='opacity .3s'; t.style.opacity='0'; setTimeout(()=>t.remove(),300); }, 5000);
+}
+function notify(title, body){
+  showToast(title, body);
+  try{
+    if('Notification' in window && Notification.permission==='granted' && document.hidden){
+      new Notification(title, { body:body||'', icon:'icon-192.png', tag:'sos' });
+    }
+  }catch(e){}
+}
+/* ask for notification permission on the first user interaction (a user gesture) */
+document.addEventListener('click', function _np(){ ensureNotifyPermission(); document.removeEventListener('click', _np); }, {once:true});
+
+/* ───── real phone calls (tel: opens the device dialer) ───── */
+const SOS_HOTLINE = '1623'; /* ⚠️ ປ່ຽນເປັນເບີສູນຮັບແຈ້ງເຫດຈິງຂອງທ່ານ */
+window.startCall = function(caller){
+  let number=null;
+  if(caller==='operator'){ const c=caseByCode(S.selCase||S.caseId); number=c?c.phone:null; } /* staff → call the reporter */
+  else { number=SOS_HOTLINE; }                                                                /* citizen → call the center */
+  if(!number){ alert('ບໍ່ມີເບີໂທ'); return; }
+  window.location.href='tel:'+String(number).replace(/[^\d+]/g,'');
+};
+
+/* ───── real GPS only — no demo coordinates ───── */
+(function(){ const st=document.createElement('style'); st.textContent='#gps-demo-btn{display:none!important;}'; document.head.appendChild(st); })();
+window.demoGPS = function(){ alert('ລະບົບໃຊ້ພິກັດ GPS ຈິງເທົ່ານັ້ນ — ກະລຸນາເປີດ Location/GPS ໃນເຄື່ອງ ແລ້ວກົດ "ດຶງພິກັດ GPS" ອີກຄັ້ງ'); };
 
 /* ───── bootstrap ───── */
 /* Restore the page FIRST (synchronous, no flash of the login screen),
