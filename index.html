@@ -2974,13 +2974,48 @@ function initRealtime(){
     .subscribe();
 }
 
+/* ───── session persistence: stay on the same page after reset/refresh ───── */
+const SESSION_KEY='sos_session_v1';
+function saveSession(){
+  try{
+    if(S.role && S.role!=='login'){
+      localStorage.setItem(SESSION_KEY, JSON.stringify({ role:S.role, pubUser:S.pubUser||null, caseId:S.caseId||null }));
+    }
+  }catch(e){}
+}
+function clearSession(){ try{ localStorage.removeItem(SESSION_KEY); }catch(e){} }
+
+/* persist the active page whenever it changes */
+const _goPagePersist = window.goPage;
+window.goPage = function(role){
+  _goPagePersist(role);
+  if(role==='login') clearSession(); else saveSession();
+};
+/* clear the saved session on logout */
+const _logoutOrig = window.logout;
+window.logout = function(){ clearSession(); if(typeof _logoutOrig==='function') _logoutOrig(); };
+
+function restoreSession(){
+  let s=null;
+  try{ s=JSON.parse(localStorage.getItem(SESSION_KEY)||'null'); }catch(e){}
+  if(!s || !s.role) return;
+  S.role=s.role;
+  if(s.pubUser){ S.pubUser=s.pubUser; const chip=document.getElementById('pub-user-chip'); if(chip && s.pubUser.fullname) chip.textContent='👤 '+s.pubUser.fullname.split(' ')[0]; }
+  if(s.caseId) S.caseId=s.caseId;
+  goPage(s.role);
+}
+
 /* ───── bootstrap ───── */
 if(sb){
-  loadCases();
-  loadMembers();
-  initRealtime();
+  (async()=>{
+    await loadCases();
+    await loadMembers();
+    initRealtime();
+    restoreSession();
+  })();
 } else {
   console.warn('Supabase not available — running with in-memory demo data only.');
+  restoreSession();
 }
 </script>
 
