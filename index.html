@@ -543,6 +543,17 @@ a{text-decoration:none;}
 </head>
 <body>
 
+<!-- ═══ SUPABASE CLIENT ═══ -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script>
+/* Supabase project connection (publishable key — safe for client-side, RLS-enforced) */
+const SUPABASE_URL = 'https://ctlklnptszzjdgbsyqdu.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_zeFAnAjXhFJybxKIhHMNhQ_FFfdMusJ';
+let sb = null;
+try { sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { realtime:{ params:{ eventsPerSecond:5 } } }); }
+catch(e){ console.error('Supabase init failed', e); }
+</script>
+
 <!-- ═══ LOGIN ═══ -->
 <div id="page-login" class="page active">
   <div class="login-box">
@@ -2643,6 +2654,334 @@ function closeMobDetail(){
     }
   };
 })();
+</script>
+
+<!-- ═══ SUPABASE DATA LAYER ═══ -->
+<script>
+/* Connects the in-memory UI to the Supabase database and keeps every role
+   in sync via Realtime. Overrides the demo's mutation functions so all
+   actions persist to Postgres instead of living only in memory. */
+
+const SB_TMAP = {fire:'ໄຟໄໝ້',medical:'ສຸກເສີນທາງການແພດ',crime:'ອາຊະຍາກຳ',accident:'ອຸບັດຕິເຫດ',flood:'ນ້ຳຖ້ວມ',other:'ອື່ນໆ'};
+const SB_IMAP = {fire:'🔥',medical:'🚑',crime:'🚨',accident:'💥',flood:'🌊',other:'❗'};
+const SB_AUTO = {
+  fire:    {fire:true,  police:false, hospital:true },
+  medical: {fire:false, police:true,  hospital:true },
+  crime:   {fire:false, police:true,  hospital:false},
+  accident:{fire:true,  police:true,  hospital:true },
+  flood:   {fire:true,  police:true,  hospital:false},
+  other:   {fire:false, police:true,  hospital:false},
+};
+const SB_AGNAMES = {fire:'ໜ່ວຍດັບເພີງ',police:'ຕຳຫຼວດ',hospital:'ໂຮງໝໍ'};
+
+function fmtTime(iso){ try{ return new Date(iso).toLocaleTimeString('lo-LA',{hour:'2-digit',minute:'2-digit'}); }catch(e){ return ''; } }
+function caseByCode(code){ return S.cases.find(x=>x.id===code); }
+function nowISO(){ return new Date().toISOString(); }
+
+function mapCase(row, disps, msgs, photos){
+  const dispatched={fire:false,police:false,hospital:false};
+  const respSt={fire:'pending',police:'pending',hospital:'pending'};
+  disps.forEach(d=>{ dispatched[d.agency]=d.dispatched; respSt[d.agency]= d.status==='done_pending' ? 'done-pending' : d.status; });
+  const chat=[]; const chats={fire:[],police:[],hospital:[]};
+  msgs.forEach(m=>{ const item={from:m.sender,txt:m.body,t:fmtTime(m.created_at)}; if(m.channel==='operator') chat.push(item); else if(chats[m.channel]) chats[m.channel].push(item); });
+  const gps=(row.gps_lat!=null && row.gps_lng!=null)?{lat:row.gps_lat,lng:row.gps_lng}:null;
+  const label=SB_TMAP[row.type]||row.type;
+  return { id:row.case_code, dbId:row.id, type:row.type, label, type_label:label, icon:SB_IMAP[row.type]||'❗',
+    name:row.reporter_name, phone:row.reporter_phone||'', loc:row.location||'', detail:row.detail||'-',
+    prio:row.priority, status:row.status, time:fmtTime(row.reported_at), gps, photos, dispatched, respSt, chat, chats };
+}
+
+function refreshActive(){
+  const r=S.role;
+  if(r==='operator'){
+    renderQueue();
+    if(S.selCase){ const c=caseByCode(S.selCase); if(c) renderDetail(c); }
+    const ov=document.getElementById('member-overlay'); if(ov && ov.classList.contains('open')) renderMemberList();
+  } else if(r==='fire'||r==='police'||r==='hospital'){
+    renderResponder();
+  } else if(r==='public'){
+    if(document.getElementById('chat-overlay').classList.contains('open')){ renderChatTabs(); renderChatMsgs(S.caseId,'public',activeChatChannel); }
+    const c=S.selCase?caseByCode(S.selCase):null; if(c){} // no-op
+  }
+}
+
+async function loadCases(){
+  if(!sb) return;
+  try{
+    const [cr,dr,mr,pr]=await Promise.all([
+      sb.from('cases').select('*').order('reported_at',{ascending:false}),
+      sb.from('case_dispatches').select('*'),
+      sb.from('case_messages').select('*').order('created_at',{ascending:true}),
+      sb.from('case_photos').select('*').order('created_at',{ascending:true}),
+    ]);
+    if(cr.error) throw cr.error;
+    const byD={}, byM={}, byP={};
+    (dr.data||[]).forEach(d=>{ (byD[d.case_id]=byD[d.case_id]||[]).push(d); });
+    (mr.data||[]).forEach(m=>{ (byM[m.case_id]=byM[m.case_id]||[]).push(m); });
+    (pr.data||[]).forEach(p=>{ (byP[p.case_id]=byP[p.case_id]||[]).push(p.image_url); });
+    S.cases=(cr.data||[]).map(row=>mapCase(row, byD[row.id]||[], byM[row.id]||[], byP[row.id]||[]));
+    refreshActive();
+  }catch(e){ console.error('loadCases failed', e); }
+}
+
+async function loadMembers(){
+  if(!sb) return;
+  try{
+    const { data, error } = await sb.from('public_members').select('*').order('submitted_at',{ascending:true});
+    if(error) throw error;
+    const mapU=r=>({ dbId:r.id, firstname:r.firstname, lastname:r.lastname, fullname:r.fullname,
+      phone:r.phone, pass:r.password, idCardImg:r.id_card_img, status:r.status, submittedAt:fmtTime(r.submitted_at) });
+    PUB_PENDING.length=0; (data||[]).forEach(r=>PUB_PENDING.push(mapU(r)));
+    PUB_USERS.length=0; (data||[]).filter(r=>r.status==='approved').forEach(r=>PUB_USERS.push(mapU(r)));
+    if(S.role==='operator'){
+      const ov=document.getElementById('member-overlay'); if(ov && ov.classList.contains('open')) renderMemberList();
+      renderQueue();
+    }
+  }catch(e){ console.error('loadMembers failed', e); }
+}
+
+/* ───── overrides: writes go to the database ───── */
+
+window._doSubmitReport = async function(name, phone, loc, detail){
+  const gps=S.gps||{lat:17.9667,lng:102.6000};
+  const dispatched=SB_AUTO[S.type]||{fire:false,police:true,hospital:false};
+  const prio=(S.type==='fire'||S.type==='accident'||S.type==='medical')?'high':'med';
+  const sentTo=Object.keys(dispatched).filter(k=>dispatched[k]).map(k=>SB_AGNAMES[k]).join(', ');
+  const autoMsg='ຮັບເລື່ອງ ແລະ ສົ່ງຕໍ່ອັດຕະໂນມັດໄປຫາ: '+sentTo+' ແລ້ວ';
+  if(!sb){ alert('ບໍ່ໄດ້ເຊື່ອມຕໍ່ຖານຂໍ້ມູນ'); return; }
+  try{
+    const { data:row, error } = await sb.from('cases').insert({
+      type:S.type, priority:prio, status:'inprogress',
+      reporter_name:name, reporter_phone:phone, location:loc, detail:detail||'-',
+      gps_lat:gps.lat, gps_lng:gps.lng,
+      is_guest: S.pubUser ? !!S.pubUser.isGuest : true,
+      reported_by: (S.pubUser && S.pubUser.dbId) ? S.pubUser.dbId : null
+    }).select().single();
+    if(error) throw error;
+    const cid=row.id;
+    await sb.from('case_dispatches').insert(['fire','police','hospital'].map(ag=>({
+      case_id:cid, agency:ag, dispatched:dispatched[ag], status:'pending',
+      dispatched_at: dispatched[ag]?nowISO():null
+    })));
+    await sb.from('case_messages').insert({ case_id:cid, sender:'operator', channel:'operator', body:autoMsg });
+    if(reportPhotos.length){ await sb.from('case_photos').insert(reportPhotos.map(src=>({case_id:cid, image_url:src}))); }
+    reportPhotos=[]; renderPhotoGrid();
+    S.caseId=row.case_code;
+    document.getElementById('ticket-no').textContent=row.case_code;
+    const dispEl=document.getElementById('success-dispatched'); if(dispEl) dispEl.textContent='📡 ສົ່ງຕໍ່ໄປຫາ: '+sentTo;
+    document.getElementById('report-form').style.display='none';
+    document.getElementById('success-box').style.display='block';
+    document.getElementById('btn-pub-chat').style.display='flex';
+    document.getElementById('btn-pub-call').style.display='flex';
+    S.pubUnread=0; updateUnreadBadge();
+    await loadCases();
+  }catch(e){ console.error(e); alert('ບັນທຶກການແຈ້ງເຫດບໍ່ສຳເລັດ: '+(e.message||e)); }
+};
+
+window.pubLogin = async function(){
+  const input=document.getElementById('li-name').value.trim();
+  const pass=document.getElementById('li-pass').value;
+  const errEl=document.getElementById('pub-login-err');
+  errEl.classList.remove('show'); errEl.style.background=''; errEl.style.borderColor=''; errEl.style.color='';
+  if(!input||!pass){ errEl.textContent='ກະລຸນາປ້ອນຊື່/ເບີໂທ ແລະ ລະຫັດຜ່ານ'; errEl.classList.add('show'); return; }
+  await loadMembers();
+  const matchFn=u=>(u.fullname.toLowerCase()===input.toLowerCase()||u.phone===input)&&u.pass===pass;
+  const pend=PUB_PENDING.find(matchFn);
+  if(pend){
+    if(pend.status==='pending'){ errEl.textContent='⏳ ຄຳຂໍຂອງທ່ານລໍຖ້າ Operator ອະນຸມັດ ກະລຸນາລໍຖ້າ'; errEl.classList.add('show'); return; }
+    if(pend.status==='rejected'){ errEl.textContent='❌ ຄຳຂໍຂອງທ່ານຖືກປະຕິເສດ ກະລຸນາຕິດຕໍ່ເຈົ້າໜ້າທີ່'; errEl.classList.add('show'); return; }
+  }
+  const u=PUB_USERS.find(matchFn);
+  if(!u){ errEl.textContent='ຊື່/ເບີໂທ ຫຼື ລະຫັດຜ່ານບໍ່ຖືກຕ້ອງ'; errEl.classList.add('show'); return; }
+  S.pubUser=u; closePubAuth(); S.role='public';
+  document.getElementById('pub-name').value=u.fullname;
+  document.getElementById('pub-phone').value=u.phone;
+  document.getElementById('pub-user-chip').textContent='👤 '+u.fullname.split(' ')[0];
+  goPage('public');
+};
+
+window.confirmAuth = async function(){
+  const user=document.getElementById('auth-username').value.trim();
+  const pass=document.getElementById('auth-password').value;
+  const uEl=document.getElementById('auth-username'), pEl=document.getElementById('auth-password'), errEl=document.getElementById('auth-error');
+  uEl.classList.remove('error'); pEl.classList.remove('error'); errEl.classList.remove('show');
+  let ok=false;
+  if(sb){
+    try{
+      const { data } = await sb.from('staff_accounts').select('id').eq('username',user).eq('password',pass).eq('role',_sel).maybeSingle();
+      if(data) ok=true;
+    }catch(e){ console.error(e); }
+  }
+  if(!ok && user==='admin' && pass==='1234') ok=true; // demo fallback
+  if(ok){
+    closeAuthModal(); S.role=_sel; goPage(_sel);
+    await loadCases();
+    if(_sel==='operator') await loadMembers();
+  } else {
+    uEl.classList.add('error'); pEl.classList.add('error'); errEl.classList.add('show');
+    pEl.value=''; setTimeout(()=>pEl.focus(),50);
+  }
+};
+
+window.submitRegister = async function(){
+  const errEl=document.getElementById('pub-reg-err'); errEl.classList.remove('show');
+  if(!pubRegData.idCardImg){ errEl.textContent='ກະລຸນາຖ່າຍ ຫຼື ເລືອກຮູບບັດປະຈຳຕົວ'; errEl.classList.add('show'); return; }
+  await loadMembers();
+  if(PUB_USERS.find(u=>u.fullname.toLowerCase()===pubRegData.fullname.toLowerCase()) ||
+     PUB_PENDING.find(u=>u.phone===pubRegData.phone && u.status==='pending')){
+    errEl.textContent='ຊື່ ຫຼື ເບີໂທນີ້ຖືກລົງທະບຽນແລ້ວ'; errEl.classList.add('show'); return;
+  }
+  try{
+    const { error } = await sb.from('public_members').insert({
+      firstname:pubRegData.firstname, lastname:pubRegData.lastname,
+      phone:pubRegData.phone, password:pubRegData.pass,
+      id_card_img:pubRegData.idCardImg, status:'pending'
+    });
+    if(error) throw error;
+  }catch(e){ console.error(e); errEl.textContent='ສະໝັກບໍ່ສຳເລັດ: '+(e.message||e); errEl.classList.add('show'); return; }
+  const phone=pubRegData.phone||'';
+  pubRegData={};
+  ['r-firstname','r-lastname','r-phone','r-pass','r-pass2'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('id-upload-area').classList.remove('has-img');
+  document.getElementById('id-preview').src='';
+  showRegStep(0);
+  document.getElementById('pub-auth-overlay').classList.remove('open');
+  openOTP('ຢືນຢັນການສ້າງບັນຊີ ສົ່ງ OTP ໄປທີ່ '+phone, ()=>{
+    document.getElementById('pub-auth-overlay').classList.add('open');
+    showAuthScreen('login-reg'); switchPubTab('login');
+    const errLogin=document.getElementById('pub-login-err');
+    errLogin.style.cssText='background:var(--green-light);border-color:var(--green-mid);color:var(--green);display:block;';
+    errLogin.textContent='✅ ສ້າງບັນຊີ ແລະ ຢືນຢັນສຳເລັດ! ລໍຖ້າ Operator ອະນຸມັດ ຈຶ່ງ Login ໄດ້';
+  });
+};
+
+window.approveMember = async function(idx){
+  const u=PUB_PENDING[idx]; if(!u||!sb) return;
+  try{ await sb.from('public_members').update({status:'approved', approved_at:nowISO()}).eq('id',u.dbId); }
+  catch(e){ alert(e.message||e); }
+  await loadMembers();
+};
+window.rejectMember = async function(idx){
+  const u=PUB_PENDING[idx]; if(!u||!sb) return;
+  try{ await sb.from('public_members').update({status:'rejected'}).eq('id',u.dbId); }
+  catch(e){ alert(e.message||e); }
+  await loadMembers();
+};
+
+window.saveEditUser = async function(){
+  const fn=document.getElementById('eu-firstname').value.trim();
+  const ln=document.getElementById('eu-lastname').value.trim();
+  const ph=document.getElementById('eu-phone').value.trim();
+  const pw=document.getElementById('eu-pass').value;
+  const err=document.getElementById('eu-err'); err.classList.remove('show');
+  if(!fn||!ln||!ph){ err.textContent='ກະລຸນາປ້ອນຂໍ້ມູນໃຫ້ຄົບ'; err.classList.add('show'); return; }
+  if(pw && pw.length<6){ err.textContent='ລະຫັດຜ່ານຕ້ອງ 6 ຕົວຂຶ້ນໄປ'; err.classList.add('show'); return; }
+  const u=PUB_USERS[editUserIdx]; if(!u||!sb){ closeEditUser(); return; }
+  const upd={ firstname:fn, lastname:ln, phone:ph };
+  if(pw) upd.password=pw;
+  if(editUserNewImg) upd.id_card_img=editUserNewImg;
+  try{ await sb.from('public_members').update(upd).eq('id',u.dbId); }
+  catch(e){ err.textContent='ບັນທຶກບໍ່ສຳເລັດ: '+(e.message||e); err.classList.add('show'); return; }
+  closeEditUser(); await loadMembers();
+};
+
+window.doDispatch = async function(cid, ag){
+  const c=caseByCode(cid); if(!c||!sb) return;
+  try{
+    await sb.from('case_dispatches').update({dispatched:true, status:'pending', dispatched_at:nowISO()}).eq('case_id',c.dbId).eq('agency',ag);
+    if(c.status==='new') await sb.from('cases').update({status:'inprogress'}).eq('id',c.dbId);
+  }catch(e){ alert(e.message||e); }
+  await loadCases();
+};
+
+window.doConfirm = async function(cid, ag){
+  const c=caseByCode(cid); if(!c||!sb) return;
+  try{ await sb.from('case_dispatches').update({status:'done', responded_at:nowISO()}).eq('case_id',c.dbId).eq('agency',ag); }
+  catch(e){ alert(e.message||e); }
+  await loadCases();
+  const c2=caseByCode(cid);
+  if(c2){
+    const allDone=['fire','police','hospital'].every(k=>!c2.dispatched[k]||c2.respSt[k]==='done');
+    if(allDone && c2.status!=='done'){
+      try{ await sb.from('cases').update({status:'done', closed_at:nowISO()}).eq('id',c2.dbId); }catch(e){}
+      await loadCases();
+    }
+  }
+};
+
+window.doClose = async function(cid){
+  const c=caseByCode(cid); if(!c||!sb) return;
+  const hasPending=['fire','police','hospital'].some(k=>c.dispatched[k]&&c.respSt[k]==='done-pending');
+  if(hasPending && !confirm('ຍັງມີໜ່ວຍງານລໍຖ້າການຢືນຢັນ ຕ້ອງການປິດຄະດີນີ້ບໍ?')) return;
+  try{ await sb.from('cases').update({status:'done', closed_at:nowISO()}).eq('id',c.dbId); }
+  catch(e){ alert(e.message||e); }
+  await loadCases();
+};
+
+window.respAct = async function(cid, action){
+  const role=S.role; const c=caseByCode(cid); if(!c||!sb) return;
+  try{
+    if(action==='accept'){ await sb.from('case_dispatches').update({status:'active', responded_at:nowISO()}).eq('case_id',c.dbId).eq('agency',role); S.respFilter='active'; }
+    else if(action==='reject'){ await sb.from('case_dispatches').update({dispatched:false, status:'pending'}).eq('case_id',c.dbId).eq('agency',role); }
+    else if(action==='going'){ await sb.from('case_dispatches').update({status:'active'}).eq('case_id',c.dbId).eq('agency',role); }
+    else if(action==='complete'){ await sb.from('case_dispatches').update({status:'done_pending'}).eq('case_id',c.dbId).eq('agency',role); S.respFilter='done'; }
+  }catch(e){ alert(e.message||e); }
+  await loadCases();
+  const tabMap={pending:0,active:1,done:2}; const tabs=document.querySelectorAll('.resp-tab');
+  if(tabs.length){ tabs.forEach(t=>t.classList.remove('active')); const i=tabMap[S.respFilter]; if(tabs[i]) tabs[i].classList.add('active'); }
+  renderResponder();
+};
+
+window.pubSendMsg = async function(){
+  const ta=document.getElementById('chat-ta'); const txt=ta.value.trim();
+  if(!txt||!S.caseId) return; const c=caseByCode(S.caseId); if(!c||!sb) return;
+  const ch=activeChatChannel; ta.value='';
+  try{ await sb.from('case_messages').insert({case_id:c.dbId, sender:'public', channel:ch, body:txt}); }
+  catch(e){ alert(e.message||e); }
+  await loadCases();
+  renderChatMsgs(S.caseId,'public',ch);
+};
+
+window.opSendChat = async function(){
+  const inp=document.getElementById('op-chat-inp'); if(!inp) return;
+  const txt=inp.value.trim(); if(!txt||!S.selCase) return;
+  const c=caseByCode(S.selCase); if(!c||!sb) return;
+  inp.value='';
+  try{ await sb.from('case_messages').insert({case_id:c.dbId, sender:'operator', channel:'operator', body:txt}); }
+  catch(e){ alert(e.message||e); }
+  await loadCases();
+  const c2=caseByCode(S.selCase); if(c2) renderOpChatMsgs(c2);
+};
+
+window.respSendChat = async function(cid){
+  const role=S.role; const inp=document.getElementById('resp-chat-inp-'+cid); if(!inp) return;
+  const txt=inp.value.trim(); if(!txt) return;
+  const c=caseByCode(cid); if(!c||!sb) return;
+  inp.value='';
+  try{ await sb.from('case_messages').insert({case_id:c.dbId, sender:role, channel:role, body:txt}); }
+  catch(e){ alert(e.message||e); }
+  await loadCases();
+};
+
+/* ───── realtime: push live updates to every connected role ───── */
+function initRealtime(){
+  if(!sb) return;
+  sb.channel('sos-realtime')
+    .on('postgres_changes',{event:'*',schema:'public',table:'cases'},          ()=>loadCases())
+    .on('postgres_changes',{event:'*',schema:'public',table:'case_dispatches'},()=>loadCases())
+    .on('postgres_changes',{event:'*',schema:'public',table:'case_messages'},  ()=>loadCases())
+    .on('postgres_changes',{event:'*',schema:'public',table:'public_members'}, ()=>loadMembers())
+    .subscribe();
+}
+
+/* ───── bootstrap ───── */
+if(sb){
+  loadCases();
+  loadMembers();
+  initRealtime();
+} else {
+  console.warn('Supabase not available — running with in-memory demo data only.');
+}
 </script>
 
 </body>
