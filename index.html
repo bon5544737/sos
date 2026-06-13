@@ -9,7 +9,9 @@
 <meta name="apple-mobile-web-app-title" content="SOS">
 <meta name="theme-color" content="#D0272A">
 <meta name="description" content="ລະບົບແຈ້ງເຫດສຸກເສີນ SOS Emergency Response System">
-<link rel="manifest" id="pwa-manifest">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
 <title>SOS Emergency Response System</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Lao:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -2448,8 +2450,8 @@ const manifest = {
   ],
   categories: ['utilities','health'],
 };
-const blob = new Blob([JSON.stringify(manifest)], {type:'application/json'});
-document.getElementById('pwa-manifest').href = URL.createObjectURL(blob);
+/* manifest is now served as a static manifest.json file (see <link rel="manifest"> in <head>) */
+void manifest;
 
 // ── SERVICE WORKER ──
 const swCode = `

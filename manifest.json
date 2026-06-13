@@ -1,0 +1,20 @@
+{
+  "name": "SOS Emergency Response System",
+  "short_name": "SOS",
+  "description": "ລະບົບແຈ້ງເຫດສຸກເສີນ SOS Emergency Response System",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "background_color": "#141413",
+  "theme_color": "#D0272A",
+  "orientation": "portrait-primary",
+  "lang": "lo",
+  "dir": "ltr",
+  "categories": ["utilities", "health"],
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
