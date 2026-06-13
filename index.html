@@ -2836,23 +2836,30 @@ window.pubLogin = async function(){
   goPage('public');
 };
 
+/* default staff logins — work instantly even if the database is slow/unreachable */
+const LOCAL_STAFF = { operator:'sos1234', fire:'sos1234', police:'sos1234', hospital:'sos1234' };
 window.confirmAuth = async function(){
   const user=document.getElementById('auth-username').value.trim();
   const pass=document.getElementById('auth-password').value;
   const uEl=document.getElementById('auth-username'), pEl=document.getElementById('auth-password'), errEl=document.getElementById('auth-error');
   uEl.classList.remove('error'); pEl.classList.remove('error'); errEl.classList.remove('show');
   let ok=false;
-  if(sb){
+  // 1) instant local credentials (no network) — admin, or the default role logins
+  if(user==='admin' && pass==='1234') ok=true;
+  if(!ok && user===_sel && LOCAL_STAFF[_sel]===pass) ok=true;
+  // 2) otherwise check the database, but never hang: time out after 7s
+  if(!ok && sb){
     try{
-      const { data } = await sb.from('staff_accounts').select('id').eq('username',user).eq('password',pass).eq('role',_sel).maybeSingle();
-      if(data) ok=true;
-    }catch(e){ console.error(e); }
+      const q=sb.from('staff_accounts').select('id').eq('username',user).eq('password',pass).eq('role',_sel).maybeSingle();
+      const to=new Promise((_,rej)=>setTimeout(()=>rej('timeout'),7000));
+      const res=await Promise.race([q,to]);
+      if(res && res.data) ok=true;
+    }catch(e){ /* offline/timeout → fall back to local result */ }
   }
-  if(!ok && user==='admin' && pass==='1234') ok=true; // demo fallback
   if(ok){
     closeAuthModal(); S.role=_sel; goPage(_sel);
-    await loadCases();
-    if(_sel==='operator') await loadMembers();
+    loadCases();                              // load in background (don't block entry)
+    if(_sel==='operator') loadMembers();
   } else {
     uEl.classList.add('error'); pEl.classList.add('error'); errEl.classList.add('show');
     pEl.value=''; setTimeout(()=>pEl.focus(),50);
