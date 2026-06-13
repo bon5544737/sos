@@ -3006,16 +3006,15 @@ function restoreSession(){
 }
 
 /* ───── bootstrap ───── */
+/* Restore the page FIRST (synchronous, no flash of the login screen),
+   then load data in the background — refreshActive() re-renders when it arrives. */
+restoreSession();
 if(sb){
-  (async()=>{
-    await loadCases();
-    await loadMembers();
-    initRealtime();
-    restoreSession();
-  })();
+  loadCases();
+  loadMembers();
+  initRealtime();
 } else {
   console.warn('Supabase not available — running with in-memory demo data only.');
-  restoreSession();
 }
 </script>
 
