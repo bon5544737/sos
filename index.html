@@ -3093,6 +3093,22 @@ function setupPhoneField(id){
   });
 })();
 
+/* ───── GPS preview uses a Google map (no API key) ───── */
+window.setGPS = function(lat,lng,demo,accuracy){
+  S.gps={lat,lng};
+  const btn=document.getElementById('gps-btn');
+  const val=document.getElementById('gps-val');
+  if(btn){ btn.className='gps-btn got'; btn.disabled=false; btn.textContent='✓ ໄດ້ຮັບພິກັດແລ້ວ'; }
+  const accTxt=accuracy?' <span style="color:var(--green);font-size:11px;">±'+Math.round(accuracy)+'m</span>':'';
+  const demoTxt=demo?' <span style="color:var(--orange);font-size:11px;">(ຕົວຢ່າງ)</span>':'';
+  if(val) val.innerHTML='<span style="font-family:var(--mono);">'+lat.toFixed(5)+', '+lng.toFixed(5)+'</span>'+(accTxt||demoTxt);
+  const hint=document.getElementById('gps-hint'); if(hint) hint.style.display='none';
+  const demoBtn=document.getElementById('gps-demo-btn'); if(demoBtn) demoBtn.style.display='none';
+  const wrap=document.getElementById('gps-map-wrap'); if(wrap) wrap.style.display='block';
+  const content=document.getElementById('gps-map-content');
+  if(content) content.innerHTML='<iframe src="https://maps.google.com/maps?q='+lat+','+lng+'&z=16&hl=lo&output=embed" style="width:100%;height:160px;border:none;display:block;" loading="lazy"></iframe>';
+};
+
 /* ───── bootstrap ───── */
 /* Restore the page FIRST (synchronous, no flash of the login screen),
    then load data in the background — refreshActive() re-renders when it arrives. */
