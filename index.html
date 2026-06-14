@@ -2469,19 +2469,8 @@ const manifest = {
 void manifest;
 
 // ── SERVICE WORKER ──
-const swCode = `
-const CACHE = 'sos-v1';
-self.addEventListener('install', e => { self.skipWaiting(); });
-self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k))))); });
-self.addEventListener('fetch', e => {
-  if(e.request.method !== 'GET') return;
-  e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)));
-});
-`;
 if('serviceWorker' in navigator){
-  const swBlob = new Blob([swCode], {type:'application/javascript'});
-  const swUrl = URL.createObjectURL(swBlob);
-  navigator.serviceWorker.register(swUrl).catch(()=>{});
+  navigator.serviceWorker.register('sw.js').catch(()=>{});   // real file → enables OS notifications + offline
 }
 
 // ── INSTALL PROMPT ──
@@ -3250,14 +3239,21 @@ function showToast(title, body){
   host.appendChild(t);
   setTimeout(()=>{ t.style.transition='opacity .3s'; t.style.opacity='0'; setTimeout(()=>t.remove(),300); }, 5000);
 }
-function notify(title, body){
-  showToast(title, body);
-  playDing();
+function osNotify(title, body){       // real OS notification — mobile (via SW) + desktop
+  if(!('Notification' in window) || Notification.permission!=='granted') return;
+  const opts={ body:body||'', icon:'icon-192.png', badge:'icon-192.png', tag:'sos', renotify:true };
   try{
-    if('Notification' in window && Notification.permission==='granted' && document.hidden){
-      new Notification(title, { body:body||'', icon:'icon-192.png', tag:'sos' });
-    }
-  }catch(e){}
+    if(navigator.serviceWorker && navigator.serviceWorker.ready){
+      navigator.serviceWorker.ready
+        .then(reg=>reg.showNotification(title, opts))
+        .catch(()=>{ try{ new Notification(title, opts); }catch(e){} });
+    } else { new Notification(title, opts); }
+  }catch(e){ try{ new Notification(title, opts); }catch(_){} }
+}
+function notify(title, body){
+  showToast(title, body);            // in-app banner (always)
+  playDing();
+  if(document.hidden) osNotify(title, body);   // app in background → push to the phone/desktop tray
 }
 /* ask for notification permission on the first user interaction (a user gesture) */
 document.addEventListener('click', function _np(){ ensureNotifyPermission(); audioCtx(); document.removeEventListener('click', _np); }, {once:true});
