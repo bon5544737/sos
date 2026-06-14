@@ -2311,6 +2311,7 @@ function renderResponder(){
           <div style="margin-top:10px;border:1px solid var(--gray-200);border-radius:10px;overflow:hidden;">
             <div style="background:var(--blue-light);padding:7px 12px;font-size:12px;font-weight:500;color:var(--blue);display:flex;align-items:center;gap:6px;">
               💬 ສົນທະນາກັບຜູ້ແຈ້ງເຫດ
+              <button onclick="startCall('reporter','${c.id}')" style="margin-left:auto;background:var(--green);color:#fff;border:none;border-radius:6px;padding:3px 10px;font-size:11px;cursor:pointer;">📞 ໂທຫາຜູ້ແຈ້ງ</button>
             </div>
             <div id="resp-chat-${c.id}" style="max-height:120px;overflow-y:auto;padding:8px 12px;display:flex;flex-direction:column;gap:6px;background:var(--gray-50);">
               ${(()=>{
@@ -2834,6 +2835,7 @@ window.pubLogin = async function(){
   document.getElementById('pub-phone').value=u.phone;
   document.getElementById('pub-user-chip').textContent='👤 '+u.fullname.split(' ')[0];
   goPage('public');
+  applyPublicIdentityLock();
 };
 
 /* default staff logins — work instantly even if the database is slow/unreachable */
@@ -3073,6 +3075,7 @@ function restoreSession(){
   if(s.pubUser){ S.pubUser=s.pubUser; const chip=document.getElementById('pub-user-chip'); if(chip && s.pubUser.fullname) chip.textContent='👤 '+s.pubUser.fullname.split(' ')[0]; }
   if(s.caseId) S.caseId=s.caseId;
   goPage(s.role);
+  if(s.role==='public') applyPublicIdentityLock();
 }
 
 /* ───── live date next to the clock ───── */
@@ -3279,12 +3282,12 @@ function hangup(send){
 }
 
 const AGENCY_LABEL = { fire:'🚒 ໜ່ວຍດັບເພີງ', police:'👮 ຕຳຫຼວດ', hospital:'🏥 ໂຮງໝໍ' };
-window.startCall = async function(caller){           // in-app voice call
+window.startCall = async function(caller, code){     // in-app voice call
   if(RTC.active){ return; }
   if(!callChan){ alert('ການໂທຍັງບໍ່ພ້ອມ ລອງໃໝ່'); return; }
   let to, title, icon;
-  if(caller==='operator'){                            // staff → reporter
-    const code=S.selCase||S.caseId; to='public:'+code; const c=caseByCode(code); title=c?('👤 '+c.name):'ຜູ້ແຈ້ງເຫດ'; icon='👤';
+  if(caller==='operator' || caller==='reporter'){     // staff / agency → the SOS reporter
+    const cc=code||S.selCase||S.caseId; to='public:'+cc; const c=caseByCode(cc); title=c?('👤 '+c.name):'ຜູ້ແຈ້ງເຫດ'; icon='👤';
   } else if(caller==='fire'||caller==='police'||caller==='hospital'){   // → a specific agency
     to=caller+':'+(S.selCase||S.caseId||''); title=AGENCY_LABEL[caller]; icon=AGENCY_LABEL[caller].split(' ')[0];
   } else if(caller==='channel'){                       // citizen → whichever chat channel is open
@@ -3360,6 +3363,29 @@ function initCalls(){
 /* ───── real GPS only — no demo coordinates ───── */
 (function(){ const st=document.createElement('style'); st.textContent='#gps-demo-btn{display:none!important;}'; document.head.appendChild(st); })();
 window.demoGPS = function(){ alert('ລະບົບໃຊ້ພິກັດ GPS ຈິງເທົ່ານັ້ນ — ກະລຸນາເປີດ Location/GPS ໃນເຄື່ອງ ແລ້ວກົດ "ດຶງພິກັດ GPS" ອີກຄັ້ງ'); };
+
+/* ───── logged-in members: lock name + phone to their registered account ───── */
+function applyPublicIdentityLock(){
+  const nm=document.getElementById('pub-name'), ph=document.getElementById('pub-phone');
+  if(!nm||!ph) return;
+  const u=S.pubUser;
+  const locked = !!(u && !u.isGuest && u.fullname);   // a real account (not a guest)
+  if(locked){
+    nm.value=u.fullname; ph.value=u.phone||'';
+    nm.readOnly=true; ph.readOnly=true;
+    nm.style.background='var(--gray-100)'; ph.style.background='var(--gray-100)';
+    nm.style.cursor='not-allowed'; ph.style.cursor='not-allowed';
+    nm.title='ລັອກຕາມບັນຊີ — ແກ້ໄຂບໍ່ໄດ້'; ph.title='ລັອກຕາມບັນຊີ — ແກ້ໄຂບໍ່ໄດ້';
+  } else {
+    nm.readOnly=false; ph.readOnly=false;
+    nm.style.background=''; ph.style.background='';
+    nm.style.cursor=''; ph.style.cursor='';
+    nm.title=''; ph.title='';
+  }
+}
+/* re-apply the lock whenever the report form is (re)shown / reset */
+const _resetPublicForm = window.resetPublicForm;
+window.resetPublicForm = function(){ if(typeof _resetPublicForm==='function') _resetPublicForm(); applyPublicIdentityLock(); };
 
 /* ───── bootstrap ───── */
 /* Restore the page FIRST (synchronous, no flash of the login screen),
