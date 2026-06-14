@@ -2749,13 +2749,18 @@ async function loadCases(){
   if(!sb) return;
   busy(true);
   try{
-    // One round-trip: cases with their dispatches + messages embedded. Photos (heavy
-    // base64) are fetched separately in the background, below.
-    const { data, error } = await sb
-      .from('cases')
-      .select('*, case_dispatches(*), case_messages(sender,channel,body,created_at)')
-      .order('reported_at',{ascending:false})
-      .limit(300);
+    // Fetch only what THIS role needs — keeps it fast when many users are online.
+    const sel='*, case_dispatches(*), case_messages(sender,channel,body,created_at)';
+    const selInner='*, case_dispatches!inner(*), case_messages(sender,channel,body,created_at)';
+    let qb;
+    if(['fire','police','hospital'].includes(S.role)){          // responder → only cases sent to my unit
+      qb=sb.from('cases').select(selInner).eq('case_dispatches.agency',S.role).eq('case_dispatches.dispatched',true);
+    } else if(S.role==='public'){                                // citizen → only my own case
+      qb=sb.from('cases').select(sel).eq('case_code', S.caseId||'__none__');
+    } else {                                                     // operator → everything (dispatcher)
+      qb=sb.from('cases').select(sel);
+    }
+    const { data, error } = await qb.order('reported_at',{ascending:false}).limit(300);
     if(error) throw error;
     S.cases=(data||[]).map(row=>{
       const msgs=(row.case_messages||[]).slice().sort((a,b)=>new Date(a.created_at)-new Date(b.created_at));
