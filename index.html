@@ -3306,23 +3306,36 @@ async function flushIce(){           // apply candidates buffered before remoteD
   const list=RTC.pendingIce.splice(0);
   for(const c of list){ try{ await RTC.pc.addIceCandidate(c); }catch(e){} }
 }
+/* compact, non-blocking call bar pinned to the top — the app stays scrollable/usable */
+function callBar(){
+  let b=document.getElementById('call-bar');
+  if(!b){
+    b=document.createElement('div'); b.id='call-bar';
+    b.style.cssText='position:fixed;top:0;left:0;right:0;z-index:1500;display:none;align-items:center;gap:10px;background:var(--gray-900);color:#fff;padding:8px 12px;font-family:var(--font);box-shadow:0 2px 12px rgba(0,0,0,.3);padding-top:calc(8px + env(safe-area-inset-top));';
+    b.innerHTML='<span id="cb-icon" style="font-size:20px;flex-shrink:0;"></span>'+
+      '<div style="flex:1;min-width:0;"><div id="cb-name" style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div><div id="cb-status" style="font-size:11px;opacity:.75;font-family:var(--mono);"></div></div>'+
+      '<button id="cb-answer" onclick="answerCall()" style="display:none;background:var(--green);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;flex-shrink:0;">ຮັບສາຍ</button>'+
+      '<button id="cb-end" onclick="endCall()" style="background:var(--red);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;flex-shrink:0;">ວາງສາຍ</button>';
+    document.body.appendChild(b);
+  }
+  return b;
+}
 function showCallUI(o){
-  const nm=document.getElementById('call-name-txt'); if(nm) nm.textContent=o.title;
-  const st=document.getElementById('call-status-txt'); if(st) st.textContent=o.status;
-  const tm=document.getElementById('call-timer-txt'); if(tm) tm.style.display='none';
-  const av=document.getElementById('call-av'); if(av){ av.textContent=o.icon||'👤'; av.classList.toggle('ringing',!!o.ringing); }
-  const ans=document.getElementById('call-ans-btn'); if(ans) ans.style.display=o.answerBtn?'flex':'none';
-  const ov=document.getElementById('call-overlay'); if(ov) ov.classList.add('open');
+  const b=callBar();
+  document.getElementById('cb-icon').textContent=o.icon||'📞';
+  document.getElementById('cb-name').textContent=o.title||'';
+  document.getElementById('cb-status').textContent=o.status||'';
+  document.getElementById('cb-answer').style.display=o.answerBtn?'inline-block':'none';
+  b.style.display='flex';
   if(o.ringing) startRingtone(); else stopRingtone();
 }
 function startTimerUI(){
   stopRingtone();
-  const st=document.getElementById('call-status-txt'); if(st) st.textContent='ກຳລັງສົນທະນາ';
-  const av=document.getElementById('call-av'); if(av) av.classList.remove('ringing');
-  const ans=document.getElementById('call-ans-btn'); if(ans) ans.style.display='none';
-  const tm=document.getElementById('call-timer-txt'); if(tm) tm.style.display='block';
+  const ans=document.getElementById('cb-answer'); if(ans) ans.style.display='none';
+  const st=document.getElementById('cb-status');
   RTC.sec=0; clearInterval(RTC.timer);
-  RTC.timer=setInterval(()=>{ RTC.sec++; const m=String(Math.floor(RTC.sec/60)).padStart(2,'0'),s=String(RTC.sec%60).padStart(2,'0'); if(tm) tm.textContent=m+':'+s; },1000);
+  if(st) st.textContent='🟢 ກຳລັງສົນທະນາ 00:00';
+  RTC.timer=setInterval(()=>{ RTC.sec++; const m=String(Math.floor(RTC.sec/60)).padStart(2,'0'),s=String(RTC.sec%60).padStart(2,'0'); if(st) st.textContent='🟢 ກຳລັງສົນທະນາ '+m+':'+s; },1000);
 }
 function hangup(send){
   stopRingtone();
@@ -3332,8 +3345,7 @@ function hangup(send){
   const a=document.getElementById('rtc-remote-audio'); if(a) a.srcObject=null;
   clearInterval(RTC.timer);
   Object.assign(RTC,{ pc:null, stream:null, callId:null, replyTo:null, isCaller:false, answered:false, active:false, incoming:null, sec:0, pendingIce:[] });
-  const ov=document.getElementById('call-overlay'); if(ov) ov.classList.remove('open');
-  const av=document.getElementById('call-av'); if(av) av.classList.remove('ringing');
+  const b=document.getElementById('call-bar'); if(b) b.style.display='none';
 }
 
 const AGENCY_LABEL = { fire:'🚒 ໜ່ວຍດັບເພີງ', police:'👮 ຕຳຫຼວດ', hospital:'🏥 ໂຮງໝໍ' };
