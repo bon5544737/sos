@@ -829,7 +829,7 @@ catch(e){ console.error('Supabase init failed', e); }
         <h3 id="chat-title-txt">ສູນສື່ສານ SOS</h3>
         <p><span class="online-dot"></span> <span id="chat-status-txt">ເຈົ້າໜ້າທີ່ພ້ອມໃຫ້ບໍລິການ</span></p>
       </div>
-      <button class="ch-call-btn" id="chat-call-btn" onclick="startCall('public')">📞 ໂທ</button>
+      <button class="ch-call-btn" id="chat-call-btn" onclick="startCall('channel')">📞 ໂທ</button>
       <button class="chat-close-btn" onclick="closeChat()">✕</button>
     </div>
     <!-- Channel tabs -->
@@ -3227,6 +3227,13 @@ function callAddress(){               // how the other party reaches ME
   if(S.role==='public')   return 'public:'+(S.caseId||'');
   return S.role+':'+(S.selCase||S.caseId||'');
 }
+function isForMe(to){                 // does an incoming offer target me?
+  if(!to) return false;
+  if(S.role==='operator') return to==='operator';
+  if(S.role==='public')   return to==='public:'+(S.caseId||'');
+  if(['fire','police','hospital'].includes(S.role)) return to.indexOf(S.role+':')===0; // any case for my agency
+  return false;
+}
 function sigSend(p){ if(callChan) try{ callChan.send({ type:'broadcast', event:'sig', payload:p }); }catch(e){} }
 function rtcAudio(){
   let a=document.getElementById('rtc-remote-audio');
@@ -3271,12 +3278,22 @@ function hangup(send){
   const av=document.getElementById('call-av'); if(av) av.classList.remove('ringing');
 }
 
+const AGENCY_LABEL = { fire:'🚒 ໜ່ວຍດັບເພີງ', police:'👮 ຕຳຫຼວດ', hospital:'🏥 ໂຮງໝໍ' };
 window.startCall = async function(caller){           // in-app voice call
   if(RTC.active){ return; }
-  let to, title, icon;
-  if(caller==='operator'){ const code=S.selCase||S.caseId; to='public:'+code; const c=caseByCode(code); title=c?('👤 '+c.name):'ຜູ້ແຈ້ງເຫດ'; icon='👤'; }
-  else { to='operator'; title='🎧 ສູນສື່ສານ SOS'; icon='🎧'; }
   if(!callChan){ alert('ການໂທຍັງບໍ່ພ້ອມ ລອງໃໝ່'); return; }
+  let to, title, icon;
+  if(caller==='operator'){                            // staff → reporter
+    const code=S.selCase||S.caseId; to='public:'+code; const c=caseByCode(code); title=c?('👤 '+c.name):'ຜູ້ແຈ້ງເຫດ'; icon='👤';
+  } else if(caller==='fire'||caller==='police'||caller==='hospital'){   // → a specific agency
+    to=caller+':'+(S.selCase||S.caseId||''); title=AGENCY_LABEL[caller]; icon=AGENCY_LABEL[caller].split(' ')[0];
+  } else if(caller==='channel'){                       // citizen → whichever chat channel is open
+    const ch=activeChatChannel;
+    if(ch==='operator'){ to='operator'; title='🎧 ສູນສື່ສານ SOS'; icon='🎧'; }
+    else { to=ch+':'+(S.caseId||''); title=AGENCY_LABEL[ch]||ch; icon=(AGENCY_LABEL[ch]||'📞').split(' ')[0]; }
+  } else {                                             // 'public' default → the center
+    to='operator'; title='🎧 ສູນສື່ສານ SOS'; icon='🎧';
+  }
   try{ RTC.stream=await navigator.mediaDevices.getUserMedia({audio:true}); }
   catch(e){ alert('ບໍ່ສາມາດເຂົ້າເຖິງໄມໂຄຣໂຟນ — ກະລຸນາອະນຸຍາດໃຊ້ໄມໃນ Browser/ແອັບ'); return; }
   RTC.active=true; RTC.isCaller=true; RTC.callId='c'+Date.now()+Math.random().toString(36).slice(2,6); RTC.replyTo=to;
@@ -3308,7 +3325,7 @@ window.endCall = function(){ hangup(true); };
 async function onSignal(msg){
   if(!msg) return;
   if(msg.type==='offer'){
-    if(msg.to!==callAddress() || RTC.active) return;     // not for me, or I'm busy
+    if(!isForMe(msg.to) || RTC.active) return;     // not for me, or I'm busy
     RTC.incoming=msg; RTC.callId=msg.callId; RTC.replyTo=msg.from; RTC.isCaller=false; RTC.answered=false;
     const code=(msg.from||'').split(':')[1]||'';
     showCallUI({ title:(msg.fromRole==='operator'?'🎧 ສູນສື່ສານ SOS':'👤 ຜູ້ແຈ້ງເຫດ '+code), icon:(msg.fromRole==='operator'?'🎧':'👤'), status:'ສາຍໂທເຂົ້າ...', ringing:true, answerBtn:true });
