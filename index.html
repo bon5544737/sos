@@ -2724,9 +2724,30 @@ function refreshActive(){
   }
 }
 
+/* ───── loading spinner (shown while data is loading) ───── */
+function ensureSpinner(){
+  if(document.getElementById('sos-loader')) return;
+  const st=document.createElement('style');
+  st.textContent='@keyframes sos-spin{to{transform:rotate(360deg)}}'+
+    '#sos-loader{position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:3000;display:none;align-items:center;gap:8px;background:#fff;border:1px solid var(--gray-200);box-shadow:0 4px 14px rgba(0,0,0,.12);border-radius:99px;padding:7px 14px;font-family:var(--font);font-size:12px;color:var(--gray-700);}'+
+    '#sos-loader.show{display:flex;}'+
+    '#sos-loader .ring{width:16px;height:16px;border:2px solid var(--gray-200);border-top-color:var(--red);border-radius:50%;animation:sos-spin .7s linear infinite;}';
+  document.head.appendChild(st);
+  const el=document.createElement('div'); el.id='sos-loader';
+  el.innerHTML='<span class="ring"></span><span>ກຳລັງໂຫລດ...</span>';
+  document.body.appendChild(el);
+}
+let _busy=0;
+function busy(on){
+  ensureSpinner();
+  _busy=Math.max(0,_busy+(on?1:-1));
+  const el=document.getElementById('sos-loader'); if(el) el.classList.toggle('show',_busy>0);
+}
+
 let _photoCache={};   // case_id -> [image_url]; keeps photos showing across reloads
 async function loadCases(){
   if(!sb) return;
+  busy(true);
   try{
     // One round-trip: cases with their dispatches + messages embedded. Photos (heavy
     // base64) are fetched separately in the background, below.
@@ -2743,6 +2764,7 @@ async function loadCases(){
     refreshActive();          // queue / detail / cards render immediately (no waiting on images)
     loadPhotos();             // images stream in afterwards
   }catch(e){ console.error('loadCases failed', e); }
+  finally{ busy(false); }
 }
 async function loadPhotos(){
   if(!sb) return;
@@ -2762,6 +2784,7 @@ function scheduleLoadMembers(){ clearTimeout(_loadMT); _loadMT=setTimeout(loadMe
 
 async function loadMembers(){
   if(!sb) return;
+  busy(true);
   try{
     const { data, error } = await sb.from('public_members').select('*').order('submitted_at',{ascending:true});
     if(error) throw error;
@@ -2774,6 +2797,7 @@ async function loadMembers(){
       renderQueue();
     }
   }catch(e){ console.error('loadMembers failed', e); }
+  finally{ busy(false); }
 }
 
 /* ───── overrides: writes go to the database ───── */
