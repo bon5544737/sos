@@ -3202,6 +3202,29 @@ window.setGPS = function(lat,lng,demo,accuracy){
   if(content) content.innerHTML='<iframe src="https://maps.google.com/maps?q='+lat+','+lng+'&z=16&hl=lo&output=embed" style="width:100%;height:160px;border:none;display:block;" loading="lazy"></iframe>';
 };
 
+/* ───── sounds (generated with Web Audio — no audio files needed) ───── */
+let _audioCtx=null;
+function audioCtx(){
+  if(!_audioCtx){ try{ _audioCtx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} }
+  if(_audioCtx && _audioCtx.state==='suspended') _audioCtx.resume();
+  return _audioCtx;
+}
+function beep(freq, start, dur, vol){
+  const ctx=audioCtx(); if(!ctx) return;
+  const o=ctx.createOscillator(), g=ctx.createGain();
+  o.type='sine'; o.frequency.value=freq; o.connect(g); g.connect(ctx.destination);
+  const t=ctx.currentTime+start;
+  g.gain.setValueAtTime(0.0001,t);
+  g.gain.exponentialRampToValueAtTime(vol||0.2, t+0.02);
+  g.gain.exponentialRampToValueAtTime(0.0001, t+dur);
+  o.start(t); o.stop(t+dur+0.03);
+}
+function playDing(){ beep(880,0,0.15,0.18); beep(1245,0.12,0.16,0.15); }   // new-message chime
+let _ringTimer=null;
+function ringBurst(){ beep(660,0,0.4,0.22); beep(520,0.45,0.4,0.22); }      // telephone-style ring
+function startRingtone(){ stopRingtone(); ringBurst(); _ringTimer=setInterval(ringBurst,1600); }
+function stopRingtone(){ if(_ringTimer){ clearInterval(_ringTimer); _ringTimer=null; } }
+
 /* ───── notifications (in-app toast + system notification) ───── */
 function ensureNotifyPermission(){
   try{ if('Notification' in window && Notification.permission==='default') Notification.requestPermission(); }catch(e){}
@@ -3221,6 +3244,7 @@ function showToast(title, body){
 }
 function notify(title, body){
   showToast(title, body);
+  playDing();
   try{
     if('Notification' in window && Notification.permission==='granted' && document.hidden){
       new Notification(title, { body:body||'', icon:'icon-192.png', tag:'sos' });
@@ -3228,7 +3252,7 @@ function notify(title, body){
   }catch(e){}
 }
 /* ask for notification permission on the first user interaction (a user gesture) */
-document.addEventListener('click', function _np(){ ensureNotifyPermission(); document.removeEventListener('click', _np); }, {once:true});
+document.addEventListener('click', function _np(){ ensureNotifyPermission(); audioCtx(); document.removeEventListener('click', _np); }, {once:true});
 
 /* ───── real phone calls (tel: opens the device dialer) ───── */
 const SOS_HOTLINE = '1623'; /* ⚠️ ປ່ຽນເປັນເບີສູນຮັບແຈ້ງເຫດຈິງຂອງທ່ານ */
@@ -3285,8 +3309,10 @@ function showCallUI(o){
   const av=document.getElementById('call-av'); if(av){ av.textContent=o.icon||'👤'; av.classList.toggle('ringing',!!o.ringing); }
   const ans=document.getElementById('call-ans-btn'); if(ans) ans.style.display=o.answerBtn?'flex':'none';
   const ov=document.getElementById('call-overlay'); if(ov) ov.classList.add('open');
+  if(o.ringing) startRingtone(); else stopRingtone();
 }
 function startTimerUI(){
+  stopRingtone();
   const st=document.getElementById('call-status-txt'); if(st) st.textContent='ກຳລັງສົນທະນາ';
   const av=document.getElementById('call-av'); if(av) av.classList.remove('ringing');
   const ans=document.getElementById('call-ans-btn'); if(ans) ans.style.display='none';
@@ -3295,6 +3321,7 @@ function startTimerUI(){
   RTC.timer=setInterval(()=>{ RTC.sec++; const m=String(Math.floor(RTC.sec/60)).padStart(2,'0'),s=String(RTC.sec%60).padStart(2,'0'); if(tm) tm.textContent=m+':'+s; },1000);
 }
 function hangup(send){
+  stopRingtone();
   if(send && RTC.callId) sigSend({type:'end', callId:RTC.callId, to:RTC.replyTo});
   if(RTC.pc){ try{RTC.pc.close();}catch(e){} }
   if(RTC.stream){ RTC.stream.getTracks().forEach(t=>t.stop()); }
@@ -3334,6 +3361,7 @@ window.startCall = async function(caller, code){     // in-app voice call
 
 window.answerCall = async function(){
   const msg=RTC.incoming; if(!msg) return;
+  stopRingtone();
   RTC.answered=true; RTC.active=true; RTC.replyTo=msg.from;
   try{ RTC.stream=await navigator.mediaDevices.getUserMedia({audio:true}); }
   catch(e){ alert('ບໍ່ສາມາດເຂົ້າເຖິງໄມໂຄຣໂຟນ'); hangup(true); return; }
