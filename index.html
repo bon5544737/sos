@@ -2096,7 +2096,7 @@ function selCase(id){
 
 function mapBlock(gps,h=150){
   if(!gps) return `<div class="map-no-gps">ບໍ່ມີຂໍ້ມູນ GPS</div>`;
-  return `<div class="map-embed"><iframe src="https://www.openstreetmap.org/export/embed.html?bbox=${gps.lng-.006},${gps.lat-.005},${gps.lng+.006},${gps.lat+.005}&layer=mapnik&marker=${gps.lat},${gps.lng}" style="width:100%;height:${h}px;border:none;display:block;"></iframe></div>`;
+  return `<div class="map-embed"><iframe loading="lazy" src="https://www.openstreetmap.org/export/embed.html?bbox=${gps.lng-.006},${gps.lat-.005},${gps.lng+.006},${gps.lat+.005}&layer=mapnik&marker=${gps.lat},${gps.lng}" style="width:100%;height:${h}px;border:none;display:block;"></iframe></div>`;
 }
 function coordsBlock(gps){
   if(!gps) return '';
@@ -2290,7 +2290,7 @@ function renderResponder(){
             <div><div class="ml">ເບີໂທ</div><div class="mv"><a href="tel:${c.phone}" style="color:var(--blue);">📞 ${c.phone}</a></div></div>
             <div style="grid-column:1/-1;"><div class="ml">ສະຖານທີ່ເກີດເຫດ</div><div class="mv">📍 ${c.loc}</div></div>
           </div>
-          ${c.gps?`<div class="rcard-map"><iframe src="${mapSrc}" style="width:100%;height:130px;border:none;display:block;"></iframe></div><div class="rcard-coords">📍 ${c.gps.lat.toFixed(5)}, ${c.gps.lng.toFixed(5)}</div>`:''}
+          ${c.gps?`<div class="rcard-coords">📍 ${c.gps.lat.toFixed(5)}, ${c.gps.lng.toFixed(5)}</div>`:''}
           <div class="rcard-desc">${c.detail}</div>
           ${c.photos&&c.photos.length?`<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">${c.photos.map(src=>`<img src="${src}" style="width:64px;height:64px;object-fit:cover;border-radius:8px;border:1px solid var(--gray-200);cursor:zoom-in;transition:opacity .15s;" onclick="zoomImg('${src}')" onmouseover="this.style.opacity='.8'" onmouseout="this.style.opacity='1'">`).join('')}</div>`:''}
           <div class="rcard-actions">
@@ -2766,21 +2766,24 @@ async function loadCases(){
   }catch(e){ console.error('loadCases failed', e); }
   finally{ busy(false); }
 }
+const _photoFetched=new Set();      // case ids whose photos we already pulled
 async function loadPhotos(){
   if(!sb) return;
+  const missing=S.cases.map(c=>c.dbId).filter(id=>id && !_photoFetched.has(id));
+  if(!missing.length) return;        // nothing new → skip the (heavy base64) download
   try{
-    const { data } = await sb.from('case_photos').select('case_id,image_url').order('created_at',{ascending:true});
-    const byP={}; (data||[]).forEach(p=>{ (byP[p.case_id]=byP[p.case_id]||[]).push(p.image_url); });
-    _photoCache=byP;
+    const { data } = await sb.from('case_photos').select('case_id,image_url').in('case_id',missing).order('created_at',{ascending:true});
+    (data||[]).forEach(p=>{ (_photoCache[p.case_id]=_photoCache[p.case_id]||[]).push(p.image_url); });
+    missing.forEach(id=>_photoFetched.add(id));
     let any=false;
-    S.cases.forEach(c=>{ const ph=byP[c.dbId]||[]; if(ph.length){ any=true; } c.photos=ph; });
+    S.cases.forEach(c=>{ const ph=_photoCache[c.dbId]||[]; c.photos=ph; if(ph.length) any=true; });
     if(any) refreshActive();
   }catch(e){ console.error('loadPhotos failed', e); }
 }
 // coalesce bursts of realtime events into a single reload
 let _loadT=null, _loadMT=null;
-function scheduleLoad(){ clearTimeout(_loadT); _loadT=setTimeout(loadCases, 250); }
-function scheduleLoadMembers(){ clearTimeout(_loadMT); _loadMT=setTimeout(loadMembers, 250); }
+function scheduleLoad(){ clearTimeout(_loadT); _loadT=setTimeout(loadCases, 400); }
+function scheduleLoadMembers(){ clearTimeout(_loadMT); _loadMT=setTimeout(loadMembers, 400); }
 
 async function loadMembers(){
   if(!sb) return;
