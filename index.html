@@ -2705,6 +2705,7 @@ function refreshActive(){
     renderQueue();
     if(S.selCase){ const c=caseByCode(S.selCase); if(c) renderDetail(c); }
     const ov=document.getElementById('member-overlay'); if(ov && ov.classList.contains('open')) renderMemberList();
+    const ro=document.getElementById('report-overlay'); if(ro && ro.style.display==='flex') renderReport();
   } else if(r==='fire'||r==='police'||r==='hospital'){
     renderResponder();
   } else if(r==='public'){
@@ -3454,6 +3455,42 @@ function applyPublicIdentityLock(){
 /* re-apply the lock whenever the report form is (re)shown / reset */
 const _resetPublicForm = window.resetPublicForm;
 window.resetPublicForm = function(){ if(typeof _resetPublicForm==='function') _resetPublicForm(); applyPublicIdentityLock(); };
+
+/* ───── operator reports / statistics dashboard ───── */
+function ensureReportOverlay(){
+  if(document.getElementById('report-overlay')) return;
+  const ov=document.createElement('div'); ov.id='report-overlay';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:900;display:none;align-items:flex-start;justify-content:center;padding:1rem;overflow:auto;font-family:var(--font);';
+  ov.innerHTML='<div style="background:#fff;border-radius:16px;width:100%;max-width:680px;margin:2rem auto;overflow:hidden;">'
+    +'<div style="display:flex;align-items:center;gap:8px;padding:14px 16px;border-bottom:1px solid var(--gray-200);">'
+    +'<span style="font-size:16px;font-weight:700;flex:1;">📊 ສະຖິຕິ ແລະ ລາຍງານ</span>'
+    +'<button onclick="closeReport()" style="background:var(--gray-100);border:none;border-radius:50%;width:32px;height:32px;font-size:18px;cursor:pointer;">✕</button></div>'
+    +'<div id="report-content" style="padding:16px;"></div></div>';
+  document.body.appendChild(ov);
+  ov.addEventListener('click',e=>{ if(e.target===ov) closeReport(); });
+}
+window.openReport=function(){ ensureReportOverlay(); renderReport(); document.getElementById('report-overlay').style.display='flex'; };
+window.closeReport=function(){ const o=document.getElementById('report-overlay'); if(o) o.style.display='none'; };
+function statCard(label,val,color){ return '<div style="flex:1;min-width:84px;background:var(--gray-50);border:1px solid var(--gray-200);border-radius:10px;padding:10px 12px;text-align:center;"><div style="font-size:22px;font-weight:700;color:'+(color||'var(--gray-800)')+';">'+val+'</div><div style="font-size:11px;color:var(--gray-600);">'+label+'</div></div>'; }
+function renderReport(){
+  const c=document.getElementById('report-content'); if(!c) return;
+  const cases=S.cases||[];
+  const total=cases.length, n=cases.filter(x=>x.status==='new').length, ip=cases.filter(x=>x.status==='inprogress').length, dn=cases.filter(x=>x.status==='done').length;
+  const TMAP={fire:'ໄຟໄໝ້',medical:'ການແພດ',crime:'ອາຊະຍາກຳ',accident:'ອຸບັດຕິເຫດ',flood:'ນ້ຳຖ້ວມ',other:'ອື່ນໆ'};
+  const AG={fire:'ໜ່ວຍດັບເພີງ',police:'ຕຳຫຼວດ',hospital:'ໂຮງໝໍ'};
+  const byAg=Object.keys(AG).map(k=>({label:AG[k], disp:cases.filter(x=>x.dispatched&&x.dispatched[k]).length, done:cases.filter(x=>x.respSt&&x.respSt[k]==='done').length}));
+  const memTotal=(PUB_USERS||[]).length, memPending=(PUB_PENDING||[]).filter(u=>u.status==='pending').length;
+  const bd='1px solid var(--gray-200)';
+  let h='';
+  h+='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">'+statCard('ທັງໝົດ',total)+statCard('ໃໝ່',n,'var(--red)')+statCard('ກຳລັງດຳເນີນ',ip,'var(--orange)')+statCard('ສຳເລັດ',dn,'var(--green)')+'</div>';
+  h+='<div style="font-weight:600;margin:10px 0 6px;">ແຍກຕາມປະເພດເຫດ</div><div style="display:flex;gap:8px;flex-wrap:wrap;">'+Object.keys(TMAP).map(k=>statCard(TMAP[k],cases.filter(x=>x.type===k).length)).join('')+'</div>';
+  h+='<div style="font-weight:600;margin:14px 0 6px;">ແຍກຕາມໜ່ວຍງານ</div>';
+  h+='<table style="width:100%;border-collapse:collapse;font-size:13px;"><tr style="background:var(--gray-50);"><th style="text-align:left;padding:6px 8px;border:'+bd+';">ໜ່ວຍງານ</th><th style="padding:6px 8px;border:'+bd+';">ສົ່ງໄປ</th><th style="padding:6px 8px;border:'+bd+';">ສຳເລັດ</th></tr>'
+    +byAg.map(a=>'<tr><td style="padding:6px 8px;border:'+bd+';">'+a.label+'</td><td style="text-align:center;padding:6px 8px;border:'+bd+';">'+a.disp+'</td><td style="text-align:center;padding:6px 8px;border:'+bd+';">'+a.done+'</td></tr>').join('')+'</table>';
+  h+='<div style="font-weight:600;margin:14px 0 6px;">ສະມາຊິກ</div><div style="display:flex;gap:8px;flex-wrap:wrap;">'+statCard('ສະມາຊິກທັງໝົດ',memTotal,'var(--blue)')+statCard('ລໍຖ້າອະນຸມັດ',memPending,'var(--orange)')+'</div>';
+  c.innerHTML=h;
+}
+try{ if(typeof BN_CONFIGS!=='undefined' && BN_CONFIGS.operator){ BN_CONFIGS.operator.splice(BN_CONFIGS.operator.length-1,0,{icon:'📊',label:'ສະຖິຕິ',action:openReport}); } }catch(e){}
 
 /* ───── bootstrap ───── */
 /* Restore the page FIRST (synchronous, no flash of the login screen),
